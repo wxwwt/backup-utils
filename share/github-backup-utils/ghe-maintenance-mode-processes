@@ -1,0 +1,36 @@
+#!/bin/sh
+#/ Usage: ghe-maintenance-mode-processes <host>
+#/ Checks for active processes on GitHub appliance at <host>.
+set -e
+
+# Bring in the backup configuration
+cd $(dirname "$0")/../..
+. share/github-backup-utils/ghe-backup-config
+
+# Parse args
+while true; do
+    case "$1" in
+        -*)
+            echo "ghe-maintenance-mode-processes: illegal argument: $1" 1>&2
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Show usage and bail with no arguments
+[ -z "$*" ] && print_usage
+
+# Grab host arg
+host="$1"
+
+# Check for active git operations
+echo 'set -o pipefail; test $(sudo -u git bash -c '\''echo "" > /tmp/newline; find /proc/*/cwd/info/nwo 2>/dev/null | xargs -L1 cat /tmp/newline'\'' 2>/dev/null | grep -v "^$" | sort | uniq -c | sort -rn | wc -l) -eq 0' | ghe-ssh "$host" /bin/bash
+
+# Check for active mysql queries
+echo 'set -o pipefail; test $(mysql -ss -u root -e '\''SELECT COUNT(*) as queries FROM INFORMATION_SCHEMA.PROCESSLIST WHERE COMMAND = "Query" AND ID != CONNECTION_ID();'\'') -eq 0' | ghe-ssh "$host" /bin/bash
+
+# Check for active resque jobs
+echo 'set -o pipefail; test $(redis-cli smembers resque:workers | xargs -I{} echo resque:worker:{} | xargs redis-cli --no-raw mget | grep -cv "(nil)") -eq 0' | ghe-ssh "$host" /bin/bash
